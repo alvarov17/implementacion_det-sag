@@ -55,7 +55,7 @@ def main():
     host = "10.18.18.248"
     user = "aapmcdet"
     password = "codelco.2020"
-    dbname = "det_pmc_process-data_dev"
+    dbname = "det_pmc_output-data_dev"
     if args.environment == 'prod':
         host = "10.18.18.247"
         user = "aasag_dch"
