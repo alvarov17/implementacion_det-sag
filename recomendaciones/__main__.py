@@ -4,13 +4,14 @@
 # Author: Alvaro Valenzuela
 # Date: 10-09-2020
 
-import sys
 import argparse
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta
+from sqlalchemy import create_engine
 
-from .core import eliminar_registros, obtener_recom_profit, obtener_recom_setpoint, ejecutar_implementadas_profit, ejecutar_implementadas_no_profit
+from .core import eliminar_registros, obtener_recom_profit, obtener_recom_setpoint
+from .recomendaciones import ejecutar_recomendaciones_implementadas_profit, ejecutar_recomendaciones_implementadas_setpoint
 
 parser = argparse.ArgumentParser(
     description="Obtiene recomendaciones implementadas")
@@ -71,25 +72,23 @@ def main():
 
     output_data_conn.autocommit = True
 
+    sql_achemy_conn = create_engine(f"postgresql://{user}:{password}@{host}/{dbname}")
+
     eliminar_registros(fi=args.fecha_inicio, ff=args.fecha_termino, conn=output_data_conn)
 
     recom_profit = obtener_recom_profit(fi=args.fecha_inicio, ff=args.fecha_termino, conn=output_data_conn)
     recom_setpoint = obtener_recom_setpoint(fi=args.fecha_inicio, ff=args.fecha_termino, conn=output_data_conn)
 
+    ejecutar_recomendaciones_implementadas_profit(process_data_conn=process_data_conn,
+                                                  sql_achemy_conn=sql_achemy_conn,
+                                                  args=args,
+                                                  recom_profit=recom_profit)
 
-    ejecutar_implementadas_profit(tiempo_respuesta=args.tiempo_respuesta,
-                                  porcentaje_implementacion=args.porcentaje_implementacion,
-                                  recomendaciones=recom_profit,
-                                  output_conn=output_data_conn,
-                                  process_conn=process_data_conn)
-    ejecutar_implementadas_no_profit(recomendaciones=recom_setpoint,
-                                     tiempo_respuesta=args.tiempo_respuesta,
-                                     porcentaje_implementacion=args.porcentaje_implementacion,
-                                     output_conn=output_data_conn,
-                                     process_conn=process_data_conn)
-
+    ejecutar_recomendaciones_implementadas_setpoint(process_data_conn=process_data_conn,
+                                                    sql_achemy_conn= sql_achemy_conn,
+                                                    args=args,
+                                                    recom_setpoint=recom_setpoint)
     exit()
-
 
 
 if __name__ == '__main__':
