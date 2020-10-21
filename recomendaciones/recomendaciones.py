@@ -1,27 +1,30 @@
-from .core import obtener_datos_por_minutos, obtener_datos_por_minutos_turno_anterior, get_df_resultado
+from .core import obtener_datos_por_minutos, obtener_datos_por_minutos_turno_anterior, get_df_resultado, \
+    respuesta_caducada, recom_hl_o_ll, tipo_de_implementacion
 import pandas as pd
+import datetime
 
 
 def ejecutar_recomendaciones_implementadas_profit(process_data_conn, sql_achemy_conn, args, recom_profit):
     for index, row in recom_profit.iterrows():
-        datos_por_minutos = obtener_datos_por_minutos(process_conn=process_data_conn, created_at=row['created_at'], tag=row['Tag'], driving_factor=row['Driving_Factor'])
-        datos_por_minutos_turno_anterior = obtener_datos_por_minutos_turno_anterior(process_conn=process_data_conn, created_at=row['created_at'], tag=row['Tag'], driving_factor=row['Driving_Factor'])
+        hora_fin_turno = (row['created_at'] + datetime.timedelta(hours=8)).replace(minute=0, second=0, microsecond=0)
+
+        datos_por_minutos = obtener_datos_por_minutos(process_conn=process_data_conn, created_at=row['created_at'], hora_fin_turno=hora_fin_turno, tag=row['tag'], driving_factor=row['driving_factor2'])
+        datos_por_minutos_turno_anterior = obtener_datos_por_minutos_turno_anterior(process_conn=process_data_conn, created_at=row['created_at'], tag=row['tag'], driving_factor=row['driving_factor2'])
 
         if datos_por_minutos.empty:
             continue
 
-        if (row['updated_at'] - row['created_at']) > pd.Timedelta(args.tiempo_respuesta, 'h'):
+        caducado = respuesta_caducada(created_at=row['created_at'], updated_at=row['updated_at'],
+                                      tiempo_respuesta=args.tiempo_respuesta)
+
+        if caducado:
             continue
 
         # Calculo del valor real utilizando los primero 15 minutos
-        val_actual = datos_por_minutos_turno_anterior.head(15)['value'].mean().round(2)
-
-        # Flags para determinar si la recomendación es de limite alto o bajo
-        is_recom_hl = False
-        is_recom_ll = False
+        val_actual = datos_por_minutos_turno_anterior.head(15)['value'].mean().round(0)
 
         # Valor original de la recomendación
-        val_recom = row['Recommended_Value']
+        val_recom = round(row['recommended_value'], 0)
 
         # Calculo del valor parcial a considerar
         recom_value_absoluto = abs(val_actual - val_recom) * (args.porcentaje_implementacion / 100)
@@ -31,102 +34,124 @@ def ejecutar_recomendaciones_implementadas_profit(process_data_conn, sql_achemy_
         # También se suma el valor absoluto con el recomendado para
         # aplicar logica en caso de que la recomendación sea
         # de implementación parcial.
-        if val_actual <= val_recom:
-            is_recom_hl = True
-            recom_value_parcial = val_actual + recom_value_absoluto
-        else:
-            is_recom_ll = True
-            recom_value_parcial = val_actual - recom_value_absoluto
 
         # Valor de limites en el momento de crearse la recomendación
         (timestamp_inicial, ll_inicial, hl_inicial) = datos_por_minutos.iloc[0, [0, 1, 2]]
 
-        if hl_inicial >= val_recom and ll_inicial <= val_recom:
+        tipo_recom = recom_hl_o_ll(hl=hl_inicial, ll=ll_inicial, val_recom=val_recom)
+
+        #recom_value_parcial = val_actual + recom_value_absoluto
+
+        if tipo_recom == 'entre_limites':
             resultado = get_df_resultado(val_actual=val_actual,
                                          val_recom=val_recom,
                                          created_at=row['created_at'],
                                          updated_at=row['updated_at'],
                                          tag_hl=hl_inicial,
                                          tag_ll=ll_inicial,
-                                         setpoint=row['Tag'],
-                                         usuario=row['Usuario'],
-                                         description=row['description'],
+                                         setpoint=row['tag'],
+                                         usuario=row['user'],
+                                         description=row['descripcion'],
                                          tag=pd.NA,
                                          parcial=pd.NA,
                                          total=pd.NA,
                                          entre_limites=True,
-                                         n_molino=row['n_molino'])
+                                         modelo=row['modelo'])
 
             resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
             continue
 
-        datos_implementacion_total = datos_por_minutos.query('hl > @val_recom & ll < @val_recom')
+        tipo = tipo_de_implementacion(df=datos_por_minutos, val_recom=val_recom, tipo_recom=tipo_recom)
 
-        if not datos_implementacion_total.empty:
-            datos_implementacion_total = datos_implementacion_total[datos_implementacion_total['timestamp'] <= (
-                    datos_implementacion_total['timestamp'].iloc[0] + pd.Timedelta(hours=2))]
+        if tipo == 'total' and tipo_recom == 'hl':
+            (TimeStamp, ll, hl, value) = datos_por_minutos.query('hl >= @val_recom').iloc[0]
+            resultado = get_df_resultado(val_actual=val_actual,
+                                         val_recom=val_recom,
+                                         created_at=row['created_at'],
+                                         updated_at=row['updated_at'],
+                                         tag_hl=hl,
+                                         tag_ll=pd.NA,
+                                         setpoint=row['tag'],
+                                         usuario=row['user'],
+                                         description=row['descripcion'],
+                                         tag=pd.NA,
+                                         parcial=pd.NA,
+                                         total=True,
+                                         entre_limites=pd.NA,
+                                         modelo=row['modelo'])
 
-            (ll_seteado, hl_seteado) = datos_implementacion_total.iloc[0, [1, 2]]
-            prom_hl = datos_implementacion_total['hl'].mean()
-            prom_ll = datos_implementacion_total['ll'].mean()
+            resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
 
-            if is_recom_hl and prom_hl >= hl_seteado:
-                resultado = get_df_resultado(val_actual=val_actual,
-                                             val_recom=val_recom,
-                                             created_at=row['created_at'],
-                                             updated_at=row['updated_at'],
-                                             tag_hl=hl_seteado,
-                                             tag_ll=pd.NA,
-                                             setpoint=row['Tag'],
-                                             usuario=row['Usuario'],
-                                             description=row['description'],
-                                             tag=pd.NA,
-                                             parcial=pd.NA,
-                                             total=True,
-                                             entre_limites=pd.NA,
-                                             n_molino=row['n_molino'])
-
-                resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
-                continue
-            elif is_recom_ll and prom_ll <= ll_seteado:
-                resultado = get_df_resultado(val_actual=val_actual,
-                                             val_recom=val_recom,
-                                             created_at=row['created_at'],
-                                             updated_at=row['updated_at'],
-                                             tag_hl=pd.NA,
-                                             tag_ll=ll_seteado,
-                                             setpoint=row['Tag'],
-                                             usuario=row['Usuario'],
-                                             description=row['description'],
-                                             tag=pd.NA,
-                                             parcial=pd.NA,
-                                             total=True,
-                                             entre_limites=pd.NA,
-                                             n_molino=row['n_molino'])
-                resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
-                continue
-
-        if hl_inicial >= recom_value_parcial or ll_inicial <= recom_value_parcial:
+        elif tipo == 'total' and tipo_recom == 'll':
+            (TimeStamp, ll, hl, value) = datos_por_minutos.query('ll <= @val_recom').iloc[0]
+            resultado = get_df_resultado(val_actual=val_actual,
+                                         val_recom=val_recom,
+                                         created_at=row['created_at'],
+                                         updated_at=row['updated_at'],
+                                         tag_hl=pd.NA,
+                                         tag_ll=ll,
+                                         setpoint=row['tag'],
+                                         usuario=row['user'],
+                                         description=row['descripcion'],
+                                         tag=pd.NA,
+                                         parcial=pd.NA,
+                                         total=True,
+                                         entre_limites=pd.NA,
+                                         modelo=row['modelo'])
+            resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
             continue
-
-        datos_implementacion_parcial = datos_por_minutos.query(
-            'hl >= @recom_value_parcial & ll <= @recom_value_parcial')
-
-        if not datos_implementacion_parcial.empty:
+        if tipo == 'parcial' and tipo_recom == 'hl':
+            resultado = get_df_resultado(val_actual=val_actual,
+                                         val_recom=val_recom,
+                                         created_at=row['created_at'],
+                                         updated_at=row['updated_at'],
+                                         tag_hl=pd.NA,
+                                         tag_ll=pd.NA,
+                                         setpoint=row['tag'],
+                                         usuario=row['user'],
+                                         description=row['descripcion'],
+                                         tag=pd.NA,
+                                         parcial=True,
+                                         total=pd.NA,
+                                         entre_limites=pd.NA,
+                                         modelo=row['modelo'])
+            resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
             continue
-
+        elif tipo == 'parcial' and tipo_recom == 'll':
+            resultado = get_df_resultado(val_actual=val_actual,
+                                         val_recom=val_recom,
+                                         created_at=row['created_at'],
+                                         updated_at=row['updated_at'],
+                                         tag_hl=pd.NA,
+                                         tag_ll=pd.NA,
+                                         setpoint=row['tag'],
+                                         usuario=row['user'],
+                                         description=row['descripcion'],
+                                         tag=pd.NA,
+                                         parcial=True,
+                                         total=pd.NA,
+                                         entre_limites=pd.NA,
+                                         modelo=row['modelo'])
+            resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
+            continue
+        elif tipo == '':
+            continue
+        continue
 
 def ejecutar_recomendaciones_implementadas_setpoint(process_data_conn, sql_achemy_conn, args, recom_setpoint):
     for index, row in recom_setpoint.iterrows():
+        hora_fin_turno = (row['created_at'] + datetime.timedelta(hours=8)).replace(minute=0, second=0, microsecond=0)
+
         datos_por_minutos = obtener_datos_por_minutos(process_conn=process_data_conn,
+                                                      hora_fin_turno=hora_fin_turno,
                                                       created_at=row['created_at'],
-                                                      tag=row['Tag'],
-                                                      driving_factor=row['Driving_Factor'])
+                                                      tag=row['tag'],
+                                                      driving_factor=row['driving_factor2'])
 
         datos_por_minutos_turno_anterior = obtener_datos_por_minutos_turno_anterior(process_conn=process_data_conn,
                                                                                     created_at=row['created_at'],
-                                                                                    tag=row['Tag'],
-                                                                                    driving_factor=row['Driving_Factor'])
+                                                                                    tag=row['tag'],
+                                                                                    driving_factor=row['driving_factor2'])
         sube = False
         baja = False
 
@@ -142,14 +167,14 @@ def ejecutar_recomendaciones_implementadas_setpoint(process_data_conn, sql_achem
 
         # Verificando si el movimiento del profit será acendente o
         # descendiente segun lo recomendado.
-        if actual_value - row['Recommended_Value'] > 0:
+        if actual_value - row['recommended_value'] > 0:
             baja = True
         else:
             sube = True
 
         # Obtenemos el valor minimo al cual se esperaria llegar
         # con la recomendación
-        recom_value = abs(actual_value - row['Recommended_Value']) * (args.porcentaje_implementacion / 100)
+        recom_value = abs(actual_value - row['recommended_value']) * (args.porcentaje_implementacion / 100)
 
         if baja:
             valor_esperado = actual_value - recom_value
@@ -164,19 +189,19 @@ def ejecutar_recomendaciones_implementadas_setpoint(process_data_conn, sql_achem
             if not datos_por_minutos.empty:
                 max_tag_value = datos_por_minutos['value'].max()
                 resultado = get_df_resultado(val_actual=actual_value,
-                                             val_recom=row['Recommended_Value'],
+                                             val_recom=row['recommended_value'],
                                              created_at=row['created_at'],
                                              updated_at=row['updated_at'],
                                              tag_hl=pd.NA,
                                              tag_ll=pd.NA,
-                                             setpoint=row['Tag'],
-                                             usuario=row['Usuario'],
-                                             description=row['description'],
+                                             setpoint=row['tag'],
+                                             usuario=row['user'],
+                                             description=row['descripcion'],
                                              tag=max_tag_value,
                                              parcial=pd.NA,
                                              total=pd.NA,
                                              entre_limites=pd.NA,
-                                             n_molino=row['n_molino'])
+                                             modelo=row['modelo'])
 
                 resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
                 continue
@@ -186,18 +211,18 @@ def ejecutar_recomendaciones_implementadas_setpoint(process_data_conn, sql_achem
             if not datos_por_minutos.empty:
                 min_tag_value = datos_por_minutos['value'].min()
                 resultado = get_df_resultado(val_actual=actual_value,
-                                             val_recom=row['Recommended_Value'],
+                                             val_recom=row['recommended_value'],
                                              created_at=row['created_at'],
                                              updated_at=row['updated_at'],
                                              tag_hl=pd.NA,
                                              tag_ll=pd.NA,
-                                             setpoint=row['Tag'],
-                                             usuario=row['Usuario'],
-                                             description=row['description'],
+                                             setpoint=row['tag'],
+                                             usuario=row['user'],
+                                             description=row['descripcion'],
                                              tag=min_tag_value,
                                              parcial=pd.NA,
                                              total=pd.NA,
                                              entre_limites=pd.NA,
-                                             n_molino=row['n_molino'])
+                                             modelo=row['modelo'])
                 resultado.to_sql(name='recom_implemented', con=sql_achemy_conn, index=False, if_exists='append')
                 continue

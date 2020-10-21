@@ -15,12 +15,6 @@ from .recomendaciones import ejecutar_recomendaciones_implementadas_profit, ejec
 
 parser = argparse.ArgumentParser(
     description="Obtiene recomendaciones implementadas")
-parser.add_argument('-env', '--environment',
-                    type=str,
-                    required=True,
-                    metavar="ambiente",
-                    help="Escritura en base de datos de desarrollo o en producción?",
-                    choices=['dev', 'prod'])
 
 parser.add_argument('-fi', '--fecha_inicio',
                     type=str,
@@ -53,19 +47,14 @@ args = parser.parse_args()
 
 
 def main():
-    host = "10.18.18.248"
-    user = "aapmcdet"
-    password = "codelco.2020"
-    dbname = "det_pmc_output-data_dev"
-    if args.environment == 'prod':
-        host = "10.18.18.247"
-        user = "aasag_dch"
-        password = "SAGChuqui2020"
-        dbname = "det_pmc_output-data_prod"
+    host = "10.18.18.246"
+    user = "postgres"
+    password = "aapstgrs2020"
+    dbname = "output_data"
 
     process_data_conn = psycopg2.connect(
-        """dbname=det_pmc_process-data_prod
-        host=10.18.18.247 user=aasag_dch password=SAGChuqui2020""")
+        """dbname=process_data
+        host=10.18.18.246 user=postgres password=aapstgrs2020""")
 
     output_data_conn = psycopg2.connect(
         host=host, user=user, password=password, dbname=dbname)
