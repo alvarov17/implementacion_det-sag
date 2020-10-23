@@ -4,11 +4,11 @@ build-base:
 
 .PHONY: build-script
 build-script:
-	docker build ./recomendaciones -t implementacion_recomendaciones:latest
+	docker build ./recomendaciones -t implementacion_recomendaciones_det-sag:latest
 
 .PHONY: run
 run:
-	docker run -e TZ=America/Santiago -d implementacion_recomendaciones:latest
+	docker run -e TZ=America/Santiago -d implementacion_recomendaciones_det-sag:latest
 
 .PHONY: clean-image
 clean-image:
